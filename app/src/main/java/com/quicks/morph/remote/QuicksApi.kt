@@ -5,13 +5,13 @@ import retrofit2.Call
 import retrofit2.http.GET
 
 data class IceServersWrapper(
-    @SerializedName("iceServers") val servers: List<IceServer>
+    @SerializedName("iceServers") val servers: IceServers
 )
 
-data class IceServer(
-    @SerializedName("url") val url: String,
+data class IceServers(
+    @SerializedName("urls") val urls: List<String>,
     @SerializedName("username") val username: String,
-    @SerializedName("credential") var credential: String? = null
+    @SerializedName("credential") val credential: String
 )
 
 data class IceResponse(

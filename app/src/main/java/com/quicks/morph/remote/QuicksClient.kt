@@ -20,17 +20,14 @@ class QuicksClient(
             override fun onResponse(call: Call<IceResponse>, response: retrofit2.Response<IceResponse>) {
                 val body = response.body()
                 val servers = body?.let {
-                    val iceServers = body.data
-                    iceServers.servers.map { iceServer ->
-                        if (iceServer.credential == null) {
-                            PeerConnection.IceServer.builder(iceServer.url)
-                                .createIceServer()
-                        } else {
-                            PeerConnection.IceServer.builder(iceServer.url)
-                                .setUsername(iceServer.username)
-                                .setPassword(iceServer.credential)
-                                .createIceServer()
-                        }
+                    val iceServersWrapper = body.data
+                    val credential = iceServersWrapper.servers.credential
+                    val username = iceServersWrapper.servers.username
+                    iceServersWrapper.servers.urls.map {
+                        PeerConnection.IceServer.builder(it)
+                            .setUsername(username)
+                            .setPassword(credential)
+                            .createIceServer()
                     }
                 }
                 onResponse(servers)

@@ -1,9 +1,11 @@
 package com.quicks.morph.remote
 
-import android.os.Handler
 import android.util.Log
 import okhttp3.*
 import okio.ByteString
+import org.json.JSONObject
+import org.webrtc.IceCandidate
+import org.webrtc.SessionDescription
 
 /**
  * This agent takes care of keeping connection to the server
@@ -13,9 +15,16 @@ class ConnectionAgent(
     private val okHttpClient: OkHttpClient
 ) : WebSocketListener() {
 
+    sealed class Message {
+        data class Candidate(val candidate: IceCandidate) : Message()
+        data class Answer(val sdp: SessionDescription) : Message()
+        object Connected : Message()
+        object Closed : Message()
+    }
+
     private val tag = "ConnectionAgent"
 
-    private val subscribers: MutableList<(String) -> Unit> = mutableListOf()
+    private val subscribers: MutableList<(Message) -> Unit> = mutableListOf()
 
     private var ws: WebSocket? = null
 
@@ -27,7 +36,7 @@ class ConnectionAgent(
         ws = okHttpClient.newWebSocket(request, this)
     }
 
-    fun subscribe(block: (String) -> Unit): () -> Unit {
+    fun subscribe(block: (Message) -> Unit): () -> Unit {
 
         subscribers += block
 
@@ -47,11 +56,38 @@ class ConnectionAgent(
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
         Log.d(tag, "CONNECTION OPEN")
+        subscribers.forEach { it(Message.Connected) }
     }
 
-    override fun onMessage(webSocket: WebSocket, text: String) {
+    override fun onMessage(webSocket: WebSocket, msg: String) {
         Log.d(tag, "TEXT MESSAGE RECEIVED")
-        subscribers.forEach { it(text) }
+
+        val json = JSONObject(msg)
+
+        val message = when (val type = json.optString("type")) {
+
+            "candidate" -> {
+                val candidate = IceCandidate(
+                    json.getString("id"),
+                    json.getInt("label"),
+                    json.getString("candidate")
+                )
+                Message.Candidate(candidate)
+            }
+
+            "answer" -> {
+                val sdp = SessionDescription(
+                    SessionDescription.Type.fromCanonicalForm(type), json.getString("sdp")
+                )
+                Message.Answer(sdp)
+            }
+
+            else -> {
+                throw IllegalArgumentException("Unexpected message !")
+            }
+        }
+
+        subscribers.forEach { it(message) }
     }
 
     override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
@@ -61,15 +97,16 @@ class ConnectionAgent(
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
         Log.d(tag, "CONNECTION CLOSED. CODE: $code, REASON: $reason")
         ws = null
+        subscribers.forEach { it(Message.Closed) }
     }
 
-    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response) {
+    override fun onFailure(webSocket: WebSocket?, t: Throwable?, response: Response?) {
         Log.d(tag, "CONNECTION FAILED: $t")
-        webSocket.cancel()
+        webSocket?.cancel()
         ws = null
-        Handler().postDelayed({
-            tryConnect()
-        }, 3000)
+        Thread.sleep(3000)
+        tryConnect()
+        subscribers.forEach { it(Message.Closed) }
     }
 
 }

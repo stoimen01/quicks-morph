@@ -1,55 +1,49 @@
 package com.quicks.morph.remote.rtc
 
+import android.content.Context
 import android.util.Log
 import org.webrtc.*
-import java.nio.ByteBuffer
+import org.webrtc.voiceengine.WebRtcAudioManager
+import org.webrtc.voiceengine.WebRtcAudioRecord
+import org.webrtc.voiceengine.WebRtcAudioTrack
+import org.webrtc.voiceengine.WebRtcAudioUtils
 import java.nio.charset.Charset
 import java.util.concurrent.Executors
 
-private const val VIDEO_TRACK_ID = "ARDAMSv0"
-private const val AUDIO_TRACK_ID = "ARDAMSa0"
-private const val VIDEO_TRACK_TYPE = "video"
-private const val TAG = "PCRTCClient"
-private const val VIDEO_CODEC_VP8 = "VP8"
-private const val VIDEO_CODEC_VP9 = "VP9"
-private const val VIDEO_CODEC_H264 = "H264"
-private const val VIDEO_CODEC_H264_BASELINE = "H264 Baseline"
-private const val VIDEO_CODEC_H264_HIGH = "H264 High"
-private const val AUDIO_CODEC_OPUS = "opus"
-private const val AUDIO_CODEC_ISAC = "ISAC"
-const val VIDEO_CODEC_PARAM_START_BITRATE = "x-google-start-bitrate"
-private const val VIDEO_FLEXFEC_FIELDTRIAL = "WebRTC-FlexFEC-03-Advertised/Enabled/WebRTC-FlexFEC-03/Enabled/"
-const val VIDEO_VP8_INTEL_HW_ENCODER_FIELDTRIAL = "WebRTC-IntelVP8/Enabled/"
-private const val VIDEO_H264_HIGH_PROFILE_FIELDTRIAL = "WebRTC-H264HighProfile/Enabled/"
-private const val DISABLE_WEBRTC_AGC_FIELDTRIAL = "WebRTC-Audio-MinimizeResamplingOnMobile/Enabled/"
-const val VIDEO_FRAME_EMIT_FIELDTRIAL = (PeerConnectionFactory.VIDEO_FRAME_EMIT_TRIAL + "/" + PeerConnectionFactory.TRIAL_ENABLED + "/")
-const val AUDIO_CODEC_PARAM_BITRATE = "maxaveragebitrate"
-private const val AUDIO_ECHO_CANCELLATION_CONSTRAINT = "googEchoCancellation"
-private const val AUDIO_AUTO_GAIN_CONTROL_CONSTRAINT = "googAutoGainControl"
-private const val AUDIO_HIGH_PASS_FILTER_CONSTRAINT = "googHighpassFilter"
-private const val AUDIO_NOISE_SUPPRESSION_CONSTRAINT = "googNoiseSuppression"
-private const val AUDIO_LEVEL_CONTROL_CONSTRAINT = "levelControl"
-private const val DTLS_SRTP_KEY_AGREEMENT_CONSTRAINT = "DtlsSrtpKeyAgreement"
-private const val HD_VIDEO_WIDTH = 1280
-private const val HD_VIDEO_HEIGHT = 720
-private const val FPS = 30
-private const val BPS_IN_KBPS = 1000
-
 class PeerAgent(
-    private val factory: PeerConnectionFactory,
-    private val enumerator: Camera2Enumerator
+    private val context: Context,
+    private val enumerator: Camera2Enumerator = Camera2Enumerator(context)
 ) : PeerConnection.Observer, SdpObserver {
 
-    // Executor thread is started once in private ctor and is used for all
-    // peer connection API calls to ensure new peer connection factory is
-    // created on the same thread as previously destroyed factory.
+    interface Listener {
+        fun onIceCandidate(candidate: IceCandidate)
+        fun onLocalDescription(sdp: SessionDescription)
+        fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>)
+    }
+
+    private val TAG = "PCRTCClient"
+
     private val executor = Executors.newSingleThreadExecutor()
+
+    private var eglBase: EglBase? = null
+
+    private var factory: PeerConnectionFactory? = null
 
     private var peerConnection: PeerConnection? = null
 
     private var dataChannel: DataChannel? = null
 
+    private var audioSource: AudioSource? = null
+
+    private var videoSource: VideoSource? = null
+
+    private var videoCapturer: VideoCapturer? = null
+
+    private var listener: Listener? = null
+
     private var queuedRemoteCandidates: ArrayList<IceCandidate>? = ArrayList()
+
+    private var localSdp: SessionDescription? = null
 
     private val sdpMediaConstraints by lazy {
         val sdpMediaConstraints = MediaConstraints()
@@ -59,32 +53,47 @@ class PeerAgent(
     }
 
     fun createPeerConnection(
-        iceServers: List<PeerConnection.IceServer>
-    ) {
+        iceServers: List<PeerConnection.IceServer>,
+        listener: Listener
+    ) = executor.execute {
 
-        val videoCapturer = tryCreateVideoCapturer()!!
+        if (factory == null) {
+            initAgent(context)
+        }
+
+        this.listener = listener
 
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers)
         rtcConfig.bundlePolicy = PeerConnection.BundlePolicy.MAXBUNDLE
         rtcConfig.continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
         rtcConfig.enableDtlsSrtp = true
 
-        val pc = factory.createPeerConnection(rtcConfig, this)!!
+        val pc = factory?.createPeerConnection(rtcConfig, this)!!
 
         val init = DataChannel.Init()
         init.ordered = false
 
-        dataChannel = pc.createDataChannel("DataBaby", init)
+        dataChannel = pc.createDataChannel("MorphData", init)
 
         Logging.enableLogToDebugOutput(Logging.Severity.LS_INFO)
 
-        val mediaStream = factory.createLocalMediaStream("ARDAMS")
+        val mediaStream = factory?.createLocalMediaStream("MorphMedia")
 
-        val videoSource = factory.createVideoSource(false)
-        videoCapturer.startCapture(HD_VIDEO_WIDTH, HD_VIDEO_HEIGHT, FPS)
-        val localVideoTrack = factory.createVideoTrack(VIDEO_TRACK_ID, videoSource)
-        localVideoTrack.setEnabled(true)
-        mediaStream.addTrack(localVideoTrack)
+        videoSource = factory?.createVideoSource(false)
+
+        videoCapturer = tryCreateVideoCapturer()!!
+
+        val surfaceTextureHelper = SurfaceTextureHelper
+            .create("CaptureThread", eglBase!!.eglBaseContext)
+
+        videoCapturer!!.initialize(surfaceTextureHelper, context, videoSource!!.getCapturerObserver())
+
+        videoCapturer!!.startCapture(HD_VIDEO_WIDTH, HD_VIDEO_HEIGHT, FPS)
+
+        val localVideoTrack = factory?.createVideoTrack(VIDEO_TRACK_ID, videoSource)
+        localVideoTrack!!.setEnabled(true)
+
+        mediaStream!!.addTrack(localVideoTrack)
 
         val audioConstraints = MediaConstraints()
         audioConstraints.mandatory.add(MediaConstraints.KeyValuePair(AUDIO_ECHO_CANCELLATION_CONSTRAINT, "false"))
@@ -92,9 +101,9 @@ class PeerAgent(
         audioConstraints.mandatory.add(MediaConstraints.KeyValuePair(AUDIO_HIGH_PASS_FILTER_CONSTRAINT, "false"))
         audioConstraints.mandatory.add(MediaConstraints.KeyValuePair(AUDIO_NOISE_SUPPRESSION_CONSTRAINT, "false"))
 
-        val audioSource = factory.createAudioSource(audioConstraints)
-        val localAudioTrack = factory.createAudioTrack(AUDIO_TRACK_ID, audioSource)
-        localAudioTrack.setEnabled(true)
+        audioSource = factory?.createAudioSource(audioConstraints)
+        val localAudioTrack = factory?.createAudioTrack(AUDIO_TRACK_ID, audioSource)
+        localAudioTrack!!.setEnabled(true)
         mediaStream.addTrack(localAudioTrack)
 
         pc.addStream(mediaStream)
@@ -102,6 +111,7 @@ class PeerAgent(
         peerConnection = pc
         Log.d(TAG, "Peer connection created.")
     }
+
 
     fun createOffer() {
         executor.execute {
@@ -146,20 +156,20 @@ class PeerAgent(
 
     /* PeerConnection observer impl */
 
-    override fun onIceCandidate(p0: IceCandidate?) {
+    override fun onIceCandidate(candidate: IceCandidate) {
         executor.execute {
-            //events.onIceCandidate(candidate)
+            listener?.onIceCandidate(candidate)
         }
     }
 
     override fun onDataChannel(dc: DataChannel) {
-        Log.d(TAG, "New Data channel " + dc.label())
+        Log.d(TAG, "New Data channel" + dc.label())
 
         dc.registerObserver(object : DataChannel.Observer {
             override fun onMessage(buffer: DataChannel.Buffer) {
                 if (buffer.binary) {
-                    Log.d(TAG, "Received binary msg over $dc");
-                    return;
+                    Log.d(TAG, "Received binary msg over $dc")
+                    return
                 }
                 val data = buffer.data
                 val bytes = ByteArray(data.capacity())
@@ -183,20 +193,20 @@ class PeerAgent(
     }
 
     override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState) {
-        executor.execute {
-            Log.d(TAG, "IceConnectionState: $newState")
-            when (newState) {
-                PeerConnection.IceConnectionState.CONNECTED -> {
-                    //events.onIceConnected()
-                }
-                PeerConnection.IceConnectionState.DISCONNECTED -> {
-                    //events.onIceDisconnected()
-                }
-                PeerConnection.IceConnectionState.FAILED -> {
-                    //reportError("ICE connection failed.")
-                }
-            }
-        }
+        Log.d(TAG, "IceConnectionState: $newState")
+    }
+
+    override fun onIceCandidatesRemoved(candidates: Array<out IceCandidate>) {
+        executor.execute{ listener?.onIceCandidatesRemoved(candidates) }
+    }
+
+    override fun onRemoveStream(stream: MediaStream) {
+    }
+
+    override fun onRenegotiationNeeded() {
+    }
+
+    override fun onAddTrack(receiver: RtpReceiver, p1: Array<out MediaStream>) {
     }
 
     override fun onIceGatheringChange(newState: PeerConnection.IceGatheringState) {
@@ -210,23 +220,6 @@ class PeerAgent(
         //Log.d(TAG, "SignalingState: " + newState);
     }
 
-    override fun onIceCandidatesRemoved(p0: Array<out IceCandidate>?) {
-        //executor.execute(() -> events.onIceCandidatesRemoved(candidates));
-    }
-
-    override fun onRemoveStream(p0: MediaStream?) {
-        //executor.execute(() -> remoteVideoTrack = null);
-    }
-
-    override fun onRenegotiationNeeded() {
-        // No need to do anything; AppRTC follows a pre-agreed-upon
-        // signaling/negotiation protocol.
-    }
-
-    override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {
-    }
-
-
     /* SdpObserver impl */
 
     override fun onSetSuccess() {
@@ -234,7 +227,9 @@ class PeerAgent(
             if (peerConnection?.remoteDescription == null) {
                 // We've just set our local SDP so time to send it.
                 Log.d(TAG, "Local SDP set succesfully")
-                //events.onLocalDescription(localSdp);
+                localSdp?.let {
+                    listener?.onLocalDescription(it)
+                }
             } else {
                 // We've just set remote description, so drain remote
                 // and send local ICE candidates.
@@ -246,10 +241,10 @@ class PeerAgent(
 
     override fun onCreateSuccess(origSdp: SessionDescription) {
         var sdpDescription = origSdp.description
-        sdpDescription = preferCodec(sdpDescription, VIDEO_CODEC_VP8, false);
+        sdpDescription = preferCodec(sdpDescription, VIDEO_CODEC_VP8, false)
 
         val sdp = SessionDescription(origSdp.type, sdpDescription)
-
+        localSdp = sdp
         executor.execute {
             Log.d(TAG, "Set local SDP from " + sdp.type)
             peerConnection?.setLocalDescription(this, sdp)
@@ -261,6 +256,8 @@ class PeerAgent(
 
     override fun onCreateFailure(p0: String?) {
     }
+
+    /* Helpers */
 
     private fun drainCandidates() {
         if (queuedRemoteCandidates != null) {
@@ -309,6 +306,98 @@ class PeerAgent(
         override fun onCameraClosed() {
             Log.d(TAG, "CAMERA CLOSED")
         }
+    }
+
+    private fun initAgent(context: Context) {
+
+        eglBase = EglBase.create()
+
+        // Initialize field trials.
+        var fieldTrials = ""
+        fieldTrials += VIDEO_VP8_INTEL_HW_ENCODER_FIELDTRIAL
+        fieldTrials += VIDEO_FRAME_EMIT_FIELDTRIAL
+
+        PeerConnectionFactory.initialize(
+            PeerConnectionFactory.InitializationOptions.builder(context)
+                .setFieldTrials(fieldTrials)
+                .setEnableInternalTracer(true)
+                .createInitializationOptions()
+        )
+
+        WebRtcAudioManager.setBlacklistDeviceForOpenSLESUsage(true)
+        WebRtcAudioUtils.setWebRtcBasedAcousticEchoCanceler(false)
+        WebRtcAudioUtils.setWebRtcBasedAutomaticGainControl(false)
+        WebRtcAudioUtils.setWebRtcBasedNoiseSuppressor(false)
+
+        // Set audio record error callbacks.
+        WebRtcAudioRecord.setErrorCallback(object : WebRtcAudioRecord.WebRtcAudioRecordErrorCallback {
+            override fun onWebRtcAudioRecordInitError(errorMessage: String) {
+                Log.e(TAG, "onWebRtcAudioRecordInitError: $errorMessage")
+            }
+            override fun onWebRtcAudioRecordStartError(
+                errorCode: WebRtcAudioRecord.AudioRecordStartErrorCode, errorMessage: String
+            ) {
+                Log.e(TAG, "onWebRtcAudioRecordStartError: $errorCode. $errorMessage")
+            }
+            override fun onWebRtcAudioRecordError(errorMessage: String) {
+                Log.e(TAG, "onWebRtcAudioRecordError: $errorMessage")
+            }
+        })
+
+        WebRtcAudioTrack.setErrorCallback(object : WebRtcAudioTrack.ErrorCallback {
+            override fun onWebRtcAudioTrackInitError(errorMessage: String) {
+                Log.e(TAG, "onWebRtcAudioTrackInitError: $errorMessage")
+            }
+            override fun onWebRtcAudioTrackStartError(
+                errorCode: WebRtcAudioTrack.AudioTrackStartErrorCode, errorMessage: String
+            ) {
+                Log.e(TAG, "onWebRtcAudioTrackStartError: $errorCode. $errorMessage")
+            }
+            override fun onWebRtcAudioTrackError(errorMessage: String) {
+                Log.e(TAG, "onWebRtcAudioTrackError: $errorMessage")
+            }
+        })
+
+        val encoderFactory = DefaultVideoEncoderFactory(eglBase!!.eglBaseContext, true, false)
+        val decoderFactory = DefaultVideoDecoderFactory(eglBase!!.eglBaseContext)
+
+        factory =  PeerConnectionFactory.builder()
+            .setOptions(null)
+            .setVideoEncoderFactory(encoderFactory)
+            .setVideoDecoderFactory(decoderFactory)
+            .createPeerConnectionFactory()
+    }
+
+    fun cleanUp() {
+
+        dataChannel?.dispose()
+        dataChannel = null
+
+        peerConnection?.dispose()
+        peerConnection = null
+
+        audioSource?.dispose()
+        audioSource = null
+
+        try {
+            videoCapturer?.stopCapture()
+        } catch (e: InterruptedException) {
+            throw RuntimeException(e)
+        }
+
+        videoCapturer?.dispose()
+        videoCapturer = null
+
+        videoSource?.dispose()
+        videoSource = null
+
+        eglBase?.release()
+        eglBase = null
+
+        factory?.dispose()
+        factory = null
+
+        Log.d(TAG, "PeerConnection closed.")
     }
 
 }
