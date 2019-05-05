@@ -1,7 +1,6 @@
 package com.quicks.morph.remote
 
 import android.util.Log
-import org.appspot.apprtc.PeerConnectionClient
 import org.json.JSONArray
 import org.json.JSONObject
 import org.webrtc.*
@@ -19,7 +18,7 @@ class RtcManager(
 
         quicksClient.getIceServers {
 
-            peerAgent.createPeerConnection({ }, { }, tryCreateVideoCapturer(), it)
+            peerAgent.createPeerConnection(tryCreateVideoCapturer(), it)
             peerAgent.createOffer()
 
             connAgent.subscribe { msg ->
