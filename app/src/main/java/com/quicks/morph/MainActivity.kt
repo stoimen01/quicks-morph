@@ -5,7 +5,7 @@ import android.os.Bundle
 import com.quicks.morph.remote.ConnectionAgent
 import com.quicks.morph.remote.QuicksAPI
 import com.quicks.morph.remote.QuicksClient
-import com.quicks.morph.remote.rtc.PeerAgent
+import com.quicks.morph.remote.rtc.PeerFactory
 import com.quicks.morph.remote.rtc.RtcManager
 import okhttp3.OkHttpClient
 import retrofit2.Retrofit
@@ -30,22 +30,22 @@ class MainActivity : Activity() {
 
     private val connAgent = ConnectionAgent(okHttpClient)
 
-    private var peerAgent: PeerAgent? = null
+    private var peerFactory: PeerFactory? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        peerAgent = PeerAgent(this)
+        peerFactory = PeerFactory(this)
 
         RtcManager(
             connAgent,
-            peerAgent!!,
+            peerFactory!!,
             QuicksClient(client)
         ).start()
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        peerAgent?.cleanUp()
+        peerFactory?.dispose()
     }
 }

@@ -17,14 +17,14 @@ class ConnectionAgent(
 
     sealed class Message {
         data class Candidate(val candidate: IceCandidate) : Message()
-        data class Answer(val sdp: SessionDescription) : Message()
+        data class Offer(val sdp: SessionDescription) : Message()
         object Connected : Message()
         object Closed : Message()
     }
 
-    private val tag = "ConnectionAgent"
+    private val tag = "RTC"
 
-    private val subscribers: MutableList<(Message) -> Unit> = mutableListOf()
+    private val subscribers: MutableList<(Message) -> Unit?> = mutableListOf()
 
     private var ws: WebSocket? = null
 
@@ -36,7 +36,7 @@ class ConnectionAgent(
         ws = okHttpClient.newWebSocket(request, this)
     }
 
-    fun subscribe(block: (Message) -> Unit): () -> Unit {
+    fun subscribe(block: (Message) -> Unit?): () -> Unit {
 
         subscribers += block
 
@@ -60,13 +60,14 @@ class ConnectionAgent(
     }
 
     override fun onMessage(webSocket: WebSocket, msg: String) {
-        Log.d(tag, "TEXT MESSAGE RECEIVED")
+
 
         val json = JSONObject(msg)
 
         val message = when (val type = json.optString("type")) {
 
             "candidate" -> {
+                Log.d(tag, "CANDIDATE RECEIVED")
                 val candidate = IceCandidate(
                     json.getString("id"),
                     json.getInt("label"),
@@ -75,11 +76,12 @@ class ConnectionAgent(
                 Message.Candidate(candidate)
             }
 
-            "answer" -> {
+            "offer" -> {
+                Log.d(tag, "OFFER RECEIVED")
                 val sdp = SessionDescription(
                     SessionDescription.Type.fromCanonicalForm(type), json.getString("sdp")
                 )
-                Message.Answer(sdp)
+                Message.Offer(sdp)
             }
 
             else -> {

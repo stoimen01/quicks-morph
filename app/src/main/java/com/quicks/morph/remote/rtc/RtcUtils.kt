@@ -1,7 +1,7 @@
 package com.quicks.morph.remote.rtc
 
 import android.util.Log
-import org.webrtc.PeerConnectionFactory
+import org.webrtc.*
 import java.util.*
 import java.util.regex.Pattern
 
@@ -180,4 +180,184 @@ fun findMediaDescriptionLine(isAudio: Boolean, sdpLines: Array<String>): Int {
         }
     }
     return -1
+}
+
+fun PeerConnectionFactory.connectionOf(
+    config: PeerConnection.RTCConfiguration,
+    onCandidate: (IceCandidate) -> Unit,
+    onCandidatesRemoved: (Array<IceCandidate>) -> Unit,
+    onIceStateChange: (PeerConnection.IceConnectionState) -> Unit,
+    onConnectionStateChange: (PeerConnection.PeerConnectionState) -> Unit,
+    onDataChannel: (DataChannel) -> Unit
+): PeerConnection {
+    return createPeerConnection(config, object : PeerConnection.Observer {
+
+        override fun onIceCandidate(candidate: IceCandidate?) {
+            candidate?.let(onCandidate)
+        }
+
+        override fun onIceCandidatesRemoved(candidates: Array<IceCandidate>?) {
+            candidates?.let(onCandidatesRemoved)
+        }
+
+        override fun onIceConnectionChange(iceState: PeerConnection.IceConnectionState?) {
+            iceState?.let(onIceStateChange)
+        }
+
+        override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
+            newState?.let(onConnectionStateChange)
+        }
+
+        override fun onDataChannel(channel: DataChannel?) {
+            channel?.let(onDataChannel)
+            /*
+            dc.registerObserver(object : DataChannel.Observer {
+                override fun onMessage(buffer: DataChannel.Buffer) {
+                    if (buffer.binary) {
+                        Log.d(TAG, "Received binary msg over $dc")
+                        return
+                    }
+                    val data = buffer.data
+                    val bytes = ByteArray(data.capacity())
+                    data.get(bytes)
+                    val strData = String(bytes, Charset.forName("UTF-8"))
+                    Log.d(TAG, "Got msg: $strData over $dc")
+                }
+
+                override fun onBufferedAmountChange(p0: Long) {
+                    Log.d(TAG, "Data channel buffered amount changed: " + dc.label() + ": " + dc.state())
+                }
+
+                override fun onStateChange() {
+                    Log.d(TAG, "Data channel state changed: " + dc.label() + ": " + dc.state())
+                }
+            })
+            */
+        }
+
+        override fun onIceConnectionReceivingChange(p0: Boolean) {
+
+        }
+
+        override fun onIceGatheringChange(p0: PeerConnection.IceGatheringState?) {
+
+        }
+
+        override fun onAddStream(p0: MediaStream?) {
+
+        }
+
+        override fun onSignalingChange(p0: PeerConnection.SignalingState?) {
+
+        }
+
+        override fun onRemoveStream(p0: MediaStream?) {
+
+        }
+
+        override fun onRenegotiationNeeded() {
+
+        }
+
+        override fun onAddTrack(p0: RtpReceiver?, p1: Array<out MediaStream>?) {
+
+        }
+
+    })!!
+
+}
+
+
+fun PeerConnection.offerOf(
+    constraints: MediaConstraints,
+    onCreateSuccess: (SessionDescription) -> Unit,
+    onCreateFail: (String) -> Unit
+) {
+    createOffer(object : SdpObserver {
+        override fun onSetFailure(p0: String?) {
+        }
+
+        override fun onSetSuccess() {
+        }
+
+        override fun onCreateSuccess(sdp: SessionDescription?) {
+            sdp?.let(onCreateSuccess)
+        }
+
+        override fun onCreateFailure(err: String?) {
+            onCreateFail(err.toString())
+        }
+
+    }, constraints)
+}
+
+fun PeerConnection.answerOf(
+    constraints: MediaConstraints?,
+    onCreateSuccess: (SessionDescription) -> Unit,
+    onCreateFail: (String) -> Unit
+) {
+    createAnswer(object : SdpObserver {
+        override fun onSetFailure(p0: String?) {
+        }
+
+        override fun onSetSuccess() {
+        }
+
+        override fun onCreateSuccess(sdp: SessionDescription?) {
+            sdp?.let(onCreateSuccess)
+        }
+
+        override fun onCreateFailure(err: String?) {
+            onCreateFail(err.toString())
+        }
+
+    }, constraints)
+}
+
+fun PeerConnection.setLocalSdp(
+    sdp: SessionDescription,
+    onSuccess: () -> Unit,
+    onFail: (String) -> Unit
+) {
+    setLocalDescription(object : SdpObserver {
+
+        override fun onSetFailure(err: String?) {
+            onFail(err.toString())
+        }
+
+        override fun onSetSuccess() {
+            onSuccess()
+        }
+
+        override fun onCreateSuccess(sdp: SessionDescription?) {
+        }
+
+        override fun onCreateFailure(err: String?) {
+        }
+
+    }, sdp)
+}
+
+fun PeerConnection.setRemoteSdp(
+    sdp: SessionDescription,
+    onSuccess: () -> Unit,
+    onFail: (String) -> Unit
+) {
+    setRemoteDescription(object : SdpObserver {
+
+        override fun onSetFailure(err: String?) {
+            onFail(err.toString())
+        }
+
+        override fun onSetSuccess() {
+            onSuccess()
+        }
+
+        override fun onCreateSuccess(sdp: SessionDescription?) {
+        }
+
+        override fun onCreateFailure(err: String?) {
+        }
+
+    }, sdp)
 }
